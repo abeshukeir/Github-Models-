@@ -68,9 +68,9 @@ jobs:
       name: azure-credit-only
       deployment: false
     env:
-      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_SUBSCRIPTION_ID: "0486f310-bc6b-42fb-824f-da5fa50d74ff"
+      AZURE_TENANT_ID: "9f9a6874-3a19-4d00-b5fa-5358ea54f27d"
+      AZURE_CLIENT_ID: "adb75382-88ad-4d60-91e6-eab47320f0bc"
       AZURE_BILLING_ACCOUNT_ID: ${{ vars.AZURE_BILLING_ACCOUNT_ID }}
       AZURE_BILLING_PROFILE_ID: ${{ vars.AZURE_BILLING_PROFILE_ID }}
 
