@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "inventory = zero-resource-change inspection; deploy = create/update one pay-per-use deployment"
+        description: "inventory = inspect only; deploy = create/update one pay-per-use deployment"
         required: true
         default: inventory
         type: choice
@@ -37,12 +37,12 @@ on:
         required: false
         type: string
       model_format:
-        description: "Model format, usually OpenAI or Microsoft"
+        description: "Model format, for example OpenAI, Microsoft, or xAI"
         required: false
         default: OpenAI
         type: string
       sku_capacity:
-        description: "Quota capacity to assign. This raises throughput allocation; GlobalStandard remains pay-per-use."
+        description: "Quota capacity assigned to the GlobalStandard deployment"
         required: false
         default: "10"
         type: string
@@ -63,7 +63,10 @@ concurrency:
 jobs:
   foundry:
     runs-on: ubuntu-latest
-    environment: azure-credit-only
+    timeout-minutes: 10
+    environment:
+      name: azure-credit-only
+      deployment: false
     env:
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
@@ -99,20 +102,31 @@ jobs:
 
       - name: Inspect available Foundry quota and model SKUs
         shell: bash
-        run: bash scripts/foundry_inventory.sh "${{ inputs.location }}" "${{ inputs.model_name }}"
+        run: |
+          bash scripts/foundry_inventory.sh             "${{ inputs.location }}"             "${{ inputs.model_name }}"
 
       - name: Validate deploy inputs
         if: ${{ inputs.mode == 'deploy' }}
         shell: bash
         run: |
           set -euo pipefail
+
           if [[ "${{ inputs.confirm_credit_only_deploy }}" != "true" ]]; then
             echo "::error::confirm_credit_only_deploy must be true."
             exit 3
           fi
+
           for value in             "${{ inputs.resource_group }}"             "${{ inputs.foundry_resource }}"             "${{ inputs.deployment_name }}"             "${{ inputs.model_name }}"             "${{ inputs.model_version }}"; do
-            [[ -n "$value" ]] || { echo "::error::A deploy input is missing."; exit 4; }
+            [[ -n "$value" ]] || {
+              echo "::error::A deploy input is missing."
+              exit 4
+            }
           done
+
+          [[ "${{ inputs.sku_capacity }}" =~ ^[1-9][0-9]*$ ]] || {
+            echo "::error::sku_capacity must be a positive integer."
+            exit 5
+          }
 
       - name: Create/update pay-per-use Foundry deployment
         if: ${{ inputs.mode == 'deploy' }}
