@@ -1,0 +1,133 @@
+name: Azure Foundry — credit-only inventory and deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "inventory = zero-resource-change inspection; deploy = create/update one pay-per-use deployment"
+        required: true
+        default: inventory
+        type: choice
+        options:
+          - inventory
+          - deploy
+      location:
+        description: "Azure region"
+        required: true
+        default: eastus
+        type: string
+      resource_group:
+        description: "Existing resource group (deploy mode only)"
+        required: false
+        type: string
+      foundry_resource:
+        description: "Existing Foundry/Cognitive Services account (deploy mode only)"
+        required: false
+        type: string
+      deployment_name:
+        description: "Deployment name (deploy mode only)"
+        required: false
+        type: string
+      model_name:
+        description: "Model name"
+        required: false
+        type: string
+      model_version:
+        description: "Exact model version (deploy mode only)"
+        required: false
+        type: string
+      model_format:
+        description: "Model format, usually OpenAI or Microsoft"
+        required: false
+        default: OpenAI
+        type: string
+      sku_capacity:
+        description: "Quota capacity to assign. This raises throughput allocation; GlobalStandard remains pay-per-use."
+        required: false
+        default: "10"
+        type: string
+      confirm_credit_only_deploy:
+        description: "Must be true for deploy mode"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: azure-foundry-credit-only
+  cancel-in-progress: false
+
+jobs:
+  foundry:
+    runs-on: ubuntu-latest
+    environment: azure-credit-only
+    env:
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_BILLING_ACCOUNT_ID: ${{ vars.AZURE_BILLING_ACCOUNT_ID }}
+      AZURE_BILLING_PROFILE_ID: ${{ vars.AZURE_BILLING_PROFILE_ID }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate required Azure OIDC variables
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in AZURE_SUBSCRIPTION_ID AZURE_TENANT_ID AZURE_CLIENT_ID; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::$name is not configured as a GitHub repository/environment variable."
+              exit 2
+            fi
+          done
+
+      - name: Sign in to Azure with GitHub OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Enforce credit-only hard stop
+        shell: bash
+        run: bash scripts/credit_only_guard.sh
+
+      - name: Inspect available Foundry quota and model SKUs
+        shell: bash
+        run: bash scripts/foundry_inventory.sh "${{ inputs.location }}" "${{ inputs.model_name }}"
+
+      - name: Validate deploy inputs
+        if: ${{ inputs.mode == 'deploy' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ inputs.confirm_credit_only_deploy }}" != "true" ]]; then
+            echo "::error::confirm_credit_only_deploy must be true."
+            exit 3
+          fi
+          for value in             "${{ inputs.resource_group }}"             "${{ inputs.foundry_resource }}"             "${{ inputs.deployment_name }}"             "${{ inputs.model_name }}"             "${{ inputs.model_version }}"; do
+            [[ -n "$value" ]] || { echo "::error::A deploy input is missing."; exit 4; }
+          done
+
+      - name: Create/update pay-per-use Foundry deployment
+        if: ${{ inputs.mode == 'deploy' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Deliberately restricted to GlobalStandard:
+          # - no ProvisionedManaged/PTU reservation
+          # - no managed GPU compute
+          # - no fixed-capacity compute purchase
+          az cognitiveservices account deployment create             --name "${{ inputs.foundry_resource }}"             --resource-group "${{ inputs.resource_group }}"             --deployment-name "${{ inputs.deployment_name }}"             --model-name "${{ inputs.model_name }}"             --model-version "${{ inputs.model_version }}"             --model-format "${{ inputs.model_format }}"             --sku-name GlobalStandard             --sku-capacity "${{ inputs.sku_capacity }}"
+
+      - name: Show resulting deployments
+        if: ${{ inputs.mode == 'deploy' }}
+        shell: bash
+        run: |
+          az cognitiveservices account deployment list             --name "${{ inputs.foundry_resource }}"             --resource-group "${{ inputs.resource_group }}"             --output table
